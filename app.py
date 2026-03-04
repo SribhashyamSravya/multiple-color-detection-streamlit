@@ -1,29 +1,12 @@
-# ==========================================================
-# STREAMLIT WEB APP - MULTIPLE COLOR DETECTION
-# ==========================================================
-
 import streamlit as st
 import cv2
 import numpy as np
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
+import av
 
-# ----------------------------------------------------------
-# Step 1: App Title and Description
-# ----------------------------------------------------------
 st.title("🎯 Real-Time Multiple Color Detection")
 st.write("Detect Red, Green, Blue, Yellow with Center Tracking")
 
-# Checkbox to Start / Stop Camera
-run = st.checkbox('Start Camera')
-
-# Placeholder for video frames
-FRAME_WINDOW = st.image([])
-
-# Open webcam
-camera = cv2.VideoCapture(0)
-
-# ----------------------------------------------------------
-# Step 2: Define Color Ranges
-# ----------------------------------------------------------
 colors = {
     "Red": ([136, 87, 111], [180, 255, 255], (0, 0, 255)),
     "Green": ([25, 52, 72], [102, 255, 255], (0, 255, 0)),
@@ -31,78 +14,56 @@ colors = {
     "Yellow": ([20, 100, 100], [30, 255, 255], (0, 255, 255))
 }
 
-# Kernel for noise removal
 kernel = np.ones((5, 5), "uint8")
 
-# ----------------------------------------------------------
-# Step 3: Real-Time Processing Loop
-# ----------------------------------------------------------
-while run:
 
-    success, frame = camera.read()
+class VideoProcessor(VideoProcessorBase):
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        hsvFrame = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    if not success:
-        break
+        for color_name, (lower, upper, box_color) in colors.items():
 
-    # Convert to HSV
-    hsvFrame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            lower = np.array(lower, np.uint8)
+            upper = np.array(upper, np.uint8)
 
-    # Process each color
-    for color_name, (lower, upper, box_color) in colors.items():
+            mask = cv2.inRange(hsvFrame, lower, upper)
+            mask = cv2.dilate(mask, kernel)
 
-        lower = np.array(lower, np.uint8)
-        upper = np.array(upper, np.uint8)
+            contours, _ = cv2.findContours(mask,
+                                           cv2.RETR_TREE,
+                                           cv2.CHAIN_APPROX_SIMPLE)
 
-        mask = cv2.inRange(hsvFrame, lower, upper)
-        mask = cv2.dilate(mask, kernel)
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area > 500:
 
-        contours, _ = cv2.findContours(mask,
-                                       cv2.RETR_TREE,
-                                       cv2.CHAIN_APPROX_SIMPLE)
+                    x, y, w, h = cv2.boundingRect(contour)
 
-        for contour in contours:
+                    cv2.rectangle(img,
+                                  (x, y),
+                                  (x + w, y + h),
+                                  box_color, 2)
 
-            area = cv2.contourArea(contour)
+                    center_x = int(x + w / 2)
+                    center_y = int(y + h / 2)
 
-            if area > 500:
+                    cv2.circle(img,
+                               (center_x, center_y),
+                               5,
+                               (255, 255, 255),
+                               -1)
 
-                x, y, w, h = cv2.boundingRect(contour)
+                    cv2.putText(img,
+                                f"{color_name}",
+                                (x, y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.8,
+                                box_color,
+                                2)
 
-                # Draw bounding box
-                cv2.rectangle(frame,
-                              (x, y),
-                              (x + w, y + h),
-                              box_color,
-                              2)
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-                # Calculate center
-                center_x = int(x + w / 2)
-                center_y = int(y + h / 2)
 
-                # Draw center point
-                cv2.circle(frame,
-                           (center_x, center_y),
-                           5,
-                           (255, 255, 255),
-                           -1)
-
-                # Display color name
-                cv2.putText(frame,
-                            f"{color_name}",
-                            (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,
-                            box_color,
-                            2)
-
-    # Convert BGR to RGB (Streamlit requires RGB)
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    # Display frame in Streamlit
-    FRAME_WINDOW.image(frame)
-
-# ----------------------------------------------------------
-# Step 4: Release Camera When Stopped
-# ----------------------------------------------------------
-camera.release()
-st.write("Camera Stopped")
+webrtc_streamer(key="example",
+                video_processor_factory=VideoProcessor)
